@@ -3,11 +3,12 @@ from typing import TypeVar, List, Dict, Any
 import jpype
 import numpy as np
 import pandas
+import pyarrow
 from jpype import JImplements, JOverride
-from pandas import DataFrame
+from pandas import DataFrame, Series
 from jpype.types import *
 
-jpype.startJVM(classpath=["/home/max/coding/graph-analytics/private/continuous-benchmarking/build/libs/continuous-benchmarking.jar"])
+jpype.startJVM("--add-opens=java.base/java.nio=ALL-UNNAMED", classpath=["/home/max/coding/work/graph-analytics/private/continuous-benchmarking/build/libs/continuous-benchmarking.jar"])
 
 import jpype.imports
 from org.neo4j.gds.core.loading.construction import GraphFactory
@@ -18,10 +19,15 @@ from org.neo4j.gds.core.loading import GraphStoreBuilder
 from org.neo4j.gds.core.loading import CSRGraphStoreUtil
 from org.neo4j.gds.api import DatabaseId
 from java.util import Optional
-from com.neo4j.gds.experimental import AlgoRunner
+from com.neo4j.gds.experimental.python import AlgoRunner
+from com.neo4j.gds.experimental.python import PyForreignAllocation
 from org.neo4j.gds.core.loading import GraphStoreCatalog
 from org.neo4j.gds.config import GraphProjectFromStoreConfig
 from org.neo4j.gds.api import RelationshipConsumer
+from org.apache.arrow.memory import RootAllocator
+from org.apache.arrow.vector import BigIntVector
+from org.apache.arrow.vector.ipc.message import ArrowFieldNode
+from java.util import ArrayList
 
 class LocalGDS:
     # def __init__(
@@ -107,7 +113,7 @@ class Graph:
         return pandas.DataFrame.from_records(python_result)
 
 
-def main():
+def gds_example():
     gds = LocalGDS()
     nodes = DataFrame({'nodeId': range(0, 100)})
     relationships = DataFrame(np.random.randint(0, 100, size=(100, 2)), columns=["sourceId", "targetId"])
@@ -137,5 +143,42 @@ def main():
         print(exception.stacktrace())
 
 
+def pbuffer_to_java(python_buffer, java_allocator):
+    if python_buffer is None:
+        return None
+
+    return java_allocator.wrapForeignAllocation(PyForreignAllocation(python_buffer.size, python_buffer.address))
+
+
+def parray_to_java(python_arrow_array, jallocator):
+    jbuffers = list(map(lambda buffer: pbuffer_to_java(buffer, jallocator), python_arrow_array.buffers()))
+
+    jarray = BigIntVector("from_python", jallocator)
+    jarray.loadFieldBuffers(ArrowFieldNode(100, python_arrow_array.null_count), ArrayList(jbuffers))
+
+    # Close the wrapped java buffers as they are no longer needed
+    for b in jbuffers:
+        if b is not None:
+            b.close()
+
+    return jarray
+
+
+def arrow_example():
+    try:
+        parray = pyarrow.array(Series(range(0, 100)))
+
+        jallocator = RootAllocator()
+        jarray = parray_to_java(parray, jallocator)
+        print(jarray.get(42))
+
+        jarray.close()
+        jallocator.close()
+    except jpype.JException as exception:
+        print(exception.message())
+        print(exception.stacktrace())
+
+
 if __name__ == "__main__":
-    main()
+    # main()
+    arrow_example()
