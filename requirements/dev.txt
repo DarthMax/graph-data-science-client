@@ -8,3 +8,5 @@ pytest
 pytest-annotate
 tox
 types-setuptools
+tabulate
+pytest-benchmark
